@@ -16,6 +16,7 @@ public class AppInfo
 {  
     private Drawable appIcon ;  
     private String appLabel;
+    private String packageName;
     private int appUid;
     private int traffic;
     
@@ -59,5 +60,15 @@ public class AppInfo
     public void setTraffic(int traffic)
     {
     	this.traffic = traffic;
+    }
+    
+    public void setPackageName(String packName)
+    {
+    	this.packageName = packName;
+    }
+    
+    public String getPackageName()
+    {
+    	return this.packageName;
     }
 }

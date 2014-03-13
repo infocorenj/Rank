@@ -12,6 +12,7 @@ import java.util.List;
 import android.app.ActivityManager;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
@@ -40,7 +41,7 @@ public class TrafficUtil
 		//创建traffic表
 		db.execSQL("CREATE TABLE " + tableName +" (id INTEGER PRIMARY KEY AUTOINCREMENT,  uid INTEGER, " +
 				"wifi_1 INTEGER, wifi_2 INTEGER, wifi_total INTEGER, last_total INTEGER," +
-				"since_boot INTEGER, total INTEGER, flag INTEGER, shuju_traffic INTEGER )");
+				"since_boot INTEGER, total INTEGER, flag INTEGER, shuju_traffic INTEGER, packageName TEXT)");
 		
 		boolean isWifiAlive = isWifiAvailable(context);
 		
@@ -49,6 +50,11 @@ public class TrafficUtil
 			AppInfo appInfo = listAppInfo.get(i);
 			
 			int uid = appInfo.getAppUid();
+			
+			//如果该应用不可以访问3G网络，则无需加入数据库
+			if(!canAccessInternet(appInfo, context))
+				continue;
+			
 			//开机以来的流量；只统计现在开始的流量，之前的不算
 			long since_boot = TrafficStats.getUidRxBytes(uid) + TrafficStats.getUidTxBytes(uid);	
 			//该值可能为-2，需要判断
@@ -67,6 +73,7 @@ public class TrafficUtil
 			values.put("total", 0);
 			values.put("flag", isWifiAlive == true ? 1 : 0);						
 			values.put("shuju_traffic", 0);
+			values.put("packageName", listAppInfo.get(i).getPackageName());
 			
 			db.insert(tableName, null, values);				
 		}
@@ -74,9 +81,40 @@ public class TrafficUtil
 		db.close();
 	}
 	
+	/**
+	 * 判断一个app是否有访问网络的权限
+	 */
+	public static boolean canAccessInternet(AppInfo appinfo, Context context)
+	{
+		boolean hasThePerm = false;
+		
+		try 
+		{
+			PackageManager  pm = context.getPackageManager();
+		
+			String[] permissions = pm.getPackageInfo(appinfo.getPackageName(),
+				PackageManager.GET_PERMISSIONS).requestedPermissions;
+			
+			for(int i = 0; i < permissions.length; i++)
+			{
+				if(permissions[i].equals("android.permission.INTERNET"))
+				{
+					hasThePerm = true;
+					break;
+				}
+			}
+		} 
+		catch (Exception e)
+		{
+			// TODO: handle exception
+		}
+		
+		return hasThePerm;		
+	}
+	
 	
 	/**
-	 * 获取所有安装的app的UID, 封装在AppInfo中
+	 * 获取所有安装的app的UID, packageName 封装在AppInfo中
 	 */	
 	public static List<AppInfo>  getAllInstalledAppsUID(Context context)
 	{
@@ -91,7 +129,8 @@ public class TrafficUtil
 		{
 			AppInfo appInfo = new AppInfo();			
 			appInfo.setAppUid(info.applicationInfo.uid);
-									
+			appInfo.setPackageName(info.packageName);
+			
 			listAppInfo.add(appInfo);
 		}
 		
@@ -161,7 +200,7 @@ public class TrafficUtil
 	}
 	
 	/**
-	 * 获取UID的流量值
+	 * 读取数据库中UID的流量值
 	 */	
 	public static int getTrafficOfUid(int uid, String which,String dbName,
 										String tableName, SQLiteDatabase db)
@@ -171,23 +210,33 @@ public class TrafficUtil
 		try 
 		{					
 			Cursor c = db.rawQuery("SELECT * FROM " + tableName + " WHERE uid = ?", new String[]{String.valueOf(uid)});
-			while (c.moveToNext()) 
-			{  
-				if(which.contains("3G"))
-				{
-					traffic = c.getInt(c.getColumnIndex("shuju_traffic"));	
-				}
-				else 
-				{
-					traffic = c.getInt(c.getColumnIndex("wifi_total"));	
-				}
-				
-				break;
-			}						
+			
+			if(c != null)
+			{
+				while (c.moveToNext()) 
+				{  
+					if(which.contains("3G"))
+					{
+						traffic = c.getInt(c.getColumnIndex("shuju_traffic"));	
+					}
+					else 
+					{
+						traffic = c.getInt(c.getColumnIndex("wifi_total"));	
+					}
+					
+					break;
+				}			
+			}
+			else
+			{
+				traffic = -1;
+			}
+						
 		} 
 		catch (Exception e)
 		{
 			// TODO: handle exception
+			traffic = -1;
 		}
 				
 		return traffic;
@@ -202,31 +251,45 @@ public class TrafficUtil
 		List<AppInfo> listAppInfo = new ArrayList<AppInfo>();
 		
 		PackageManager  pm = context.getPackageManager();
-		List<PackageInfo> packinfos = pm
-                .getInstalledPackages(PackageManager.GET_UNINSTALLED_PACKAGES
-                        | PackageManager.GET_PERMISSIONS);	
 		//打开数据库		
 		SQLiteDatabase db = context.openOrCreateDatabase(dbName,  Context.MODE_PRIVATE, null); 
-			
-		for (PackageInfo info : packinfos) 
+		Cursor c = db.rawQuery("SELECT * FROM " + tableName, null);
+		
+		while(c.moveToNext())
 		{
-			AppInfo appInfo = new AppInfo();
-			appInfo.setAppIcon(info.applicationInfo.loadIcon(pm));
-			appInfo.setAppUid(info.applicationInfo.uid);
+			int uid = c.getInt(c.getColumnIndex("uid"));	
+			String packageName = c.getString(c.getColumnIndex("packageName"));
 			
-			//根据UID 读取数据库中的3G流量
-			int traffic = getTrafficOfUid(info.applicationInfo.uid, which, dbName, tableName, db);				
-			appInfo.setTraffic(traffic);
-						
-			String appName = info.applicationInfo.loadLabel(pm).toString();			
-			appInfo.setAppLabel(appName);
-			
-			if(traffic >= 0)
-				listAppInfo.add(appInfo);
-		}
+			try 
+			{
+				//获取ApplicationInfo
+				ApplicationInfo applicationInfo = pm.getApplicationInfo(packageName, PackageManager.GET_META_DATA);
+				
+				//封装流量数据
+				AppInfo appInfo = new AppInfo();
+				
+				appInfo.setAppIcon(applicationInfo.loadIcon(pm));
+				appInfo.setAppUid(uid);
+				
+				//根据UID 读取数据库中的3G流量
+				int traffic = getTrafficOfUid(uid, which, dbName, tableName, db);				
+				appInfo.setTraffic(traffic);
+							
+				String appName = applicationInfo.loadLabel(pm).toString();			
+				appInfo.setAppLabel(appName);
+				
+				if(traffic >= 0)
+					listAppInfo.add(appInfo);
+			} 
+			catch (Exception e) 
+			{
+				// TODO: handle exception
+			}			
+		}					
 		
 		db.close();
 		
+		//流量排序
 		ComparatorUser comparator=new ComparatorUser();
 		Collections.sort(listAppInfo, comparator);
 		  
@@ -242,13 +305,13 @@ public class TrafficUtil
 		
 		try
 		{
-			List<AppInfo> listAppInfo = getAllInstalledAppsUID(context);
 			//打开数据库		
-			SQLiteDatabase db = context.openOrCreateDatabase(dbName,  Context.MODE_PRIVATE, null); 						
+			SQLiteDatabase db = context.openOrCreateDatabase(dbName,  Context.MODE_PRIVATE, null); 
+			Cursor c = db.rawQuery("SELECT * FROM " + tableName, null);
 			
-			for(AppInfo appInfo : listAppInfo)
+			while(c.moveToNext())
 			{
-				int uid = appInfo.getAppUid();
+				int uid = c.getInt(c.getColumnIndex("uid"));
 				
 				try
 				{
@@ -259,20 +322,10 @@ public class TrafficUtil
 					
 					//从数据库中读取想应数据
 					long total = 0;
-					long wifi_1 = 0;		
-					long wifi_total = 0;
-					long last_total = 0;
-					long flag = -1;
-					
-					Cursor c = db.rawQuery("SELECT * FROM "+ tableName +" WHERE uid = ?", new String[]{String.valueOf(uid)});
-					while (c.moveToNext()) 
-					{  
-						wifi_1 = c.getInt(c.getColumnIndex("wifi_1"));			
-						wifi_total = c.getInt(c.getColumnIndex("wifi_total"));
-						last_total = c.getInt(c.getColumnIndex("last_total"));
-						flag = c.getInt(c.getColumnIndex("flag"));
-						break;
-					}										
+					long wifi_1 = c.getInt(c.getColumnIndex("wifi_1"));	
+					long wifi_total =c.getInt(c.getColumnIndex("wifi_total"));
+					long last_total = c.getInt(c.getColumnIndex("last_total"));
+					long flag = c.getInt(c.getColumnIndex("flag"));																					
 							
 					total = last_total + since_boot;
 					
@@ -394,18 +447,16 @@ public class TrafficUtil
 	public static void forWifiStateChanged(Context context, String dbName, String tableName)
 	{
 		try 
-		{
-			List<AppInfo> listAppInfo = new ArrayList<AppInfo>();
-			listAppInfo = getAllInstalledAppsUID(context);
-			
+		{			
 			//如果网络状态发生改变，判断wifi是否可用			
 			boolean isWifiAvailable = isWifiAvailable(context);
 			
 			SQLiteDatabase db =  context.openOrCreateDatabase(dbName,  Context.MODE_PRIVATE, null);  
-				
-			for(AppInfo appInfo : listAppInfo)
-			{
-				int uid = appInfo.getAppUid();
+			Cursor cursor = db.rawQuery("SELECT * FROM " + tableName, new String[]{});
+			
+			while (cursor.moveToNext()) 
+			{  	
+				int uid = cursor.getInt(cursor.getColumnIndex("uid"));
 				
 				try 
 				{
@@ -425,23 +476,11 @@ public class TrafficUtil
 					}
 					else
 					{
-						//如果关闭
-						//结余本次wifi过程中 uid应用的 流量				
-						Cursor c = db.rawQuery("SELECT * FROM "+tableName+" WHERE uid = ?", new String[]{String.valueOf(uid)});
-						
-						long wifi_1 = 0;
-						long wifi_total = 0;
-						long last_total = 0;
-						long flag = -1;
-						
-						while (c.moveToNext()) 
-						{  
-							wifi_1 = c.getInt(c.getColumnIndex("wifi_1"));
-							wifi_total = c.getInt(c.getColumnIndex("wifi_total"));
-							last_total =  c.getInt(c.getColumnIndex("last_total"));
-							flag = c.getInt(c.getColumnIndex("flag"));
-							break;
-						}
+						//如果关闭, 结余本次wifi过程中 uid应用的 流量															
+						long wifi_1 = cursor.getInt(cursor.getColumnIndex("wifi_1"));
+						long wifi_total = cursor.getInt(cursor.getColumnIndex("wifi_total"));
+						long last_total = cursor.getInt(cursor.getColumnIndex("last_total"));
+						long flag = cursor.getInt(cursor.getColumnIndex("flag"));												
 						
 						//判断是否是从wifi切换到其他网络
 						if(flag == 1)
@@ -487,37 +526,30 @@ public class TrafficUtil
 	public static void forShutdown(Context context, String dbName, String tableName)
 	{
 		try 
-		{
-			List<AppInfo> listAppInfo = new ArrayList<AppInfo>();
-			listAppInfo = getAllInstalledAppsUID(context);
-						
+		{			
 			SQLiteDatabase db =  context.openOrCreateDatabase(dbName,  Context.MODE_PRIVATE, null);  
-				
-			for(AppInfo appInfo : listAppInfo)
+			Cursor c = db.rawQuery("SELECT * FROM "+ tableName , null);	
+
+			while(c.moveToNext())
 			{
-				int uid = appInfo.getAppUid();
+				int uid = c.getInt(c.getColumnIndex("uid"));
 				
 				try 
 				{
-					Cursor c = db.rawQuery("SELECT * FROM "+ tableName +" WHERE uid = ?", new String[]{String.valueOf(uid)});
-					
 					long since_boot = TrafficStats.getUidRxBytes(uid) + TrafficStats.getUidTxBytes(uid);
 					if(since_boot < 0)
 						since_boot = 0;
+					
 					long last_total = 0;		
 					long flag = -1;
 					long wifi_1 = -1;	
 					long wifi_total = 0;
 					
-					while (c.moveToNext()) 
-					{  				
-						last_total = c.getInt(c.getColumnIndex("last_total"));			
-						flag = c.getInt(c.getColumnIndex("flag"));
-						wifi_1 = c.getInt(c.getColumnIndex("wifi_1"));
-						wifi_total = c.getInt(c.getColumnIndex("wifi_total"));
-						break;
-					}
-					
+					last_total = c.getInt(c.getColumnIndex("last_total"));			
+					flag = c.getInt(c.getColumnIndex("flag"));
+					wifi_1 = c.getInt(c.getColumnIndex("wifi_1"));
+					wifi_total = c.getInt(c.getColumnIndex("wifi_total"));
+										
 					if(flag == 0)
 					{
 						ContentValues cv = new ContentValues();  
@@ -563,6 +595,15 @@ public class TrafficUtil
 	 */
 	public  static void addAppInfoData(Context context, String dbName, String tableName, int uid)
 	{
+		String packageName = getPackageNameByUID(context, uid);
+	
+		AppInfo appInfo = new AppInfo();
+		appInfo.setPackageName(packageName);
+		
+		//判断应用是否有internet权限
+		if(!canAccessInternet(appInfo, context))
+			return;
+		
 		SQLiteDatabase db =  context.openOrCreateDatabase(dbName,  Context.MODE_PRIVATE, null);  
 		
 		//开机以来的流量；只统计现在开始的流量，之前的不算
@@ -594,6 +635,7 @@ public class TrafficUtil
 		}
 		
 		values.put("shuju_traffic", 0);
+		values.put("packageName", packageName);
 		
 		db.insert(tableName, null, values);		
 		
@@ -637,6 +679,27 @@ public class TrafficUtil
 		}	
 		
 		return isDeleted;
+	}
+	
+	/**
+	 * 根据uID获取包名
+	 */
+	public static String getPackageNameByUID(Context context, int uid)
+	{
+		String packageName = "";
+		
+		List<AppInfo> list = getAllInstalledAppsUID(context);
+		
+		for(int i = 0; i < list.size(); i++)
+		{
+			if(list.get(i).getAppUid() == uid)
+			{
+				packageName = list.get(i).getPackageName();
+				break;
+			}
+		}
+		
+		return packageName;
 	}
 }
 
