@@ -70,7 +70,7 @@ public class TrafficUtil
 			values.put("wifi_total", since_boot);
 			values.put("last_total", 0);
 			values.put("since_boot", 0);
-			values.put("total", 0);
+			values.put("total", since_boot);
 			values.put("flag", isWifiAlive == true ? 1 : 0);						
 			values.put("shuju_traffic", 0);
 			values.put("packageName", listAppInfo.get(i).getPackageName());
