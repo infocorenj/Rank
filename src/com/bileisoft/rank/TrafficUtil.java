@@ -388,7 +388,7 @@ public class TrafficUtil
 	{
 		boolean isNormally = true;
 		
-		Cursor cursor = db.rawQuery("SELECT * FROM " + tableName, new String[]{});
+		Cursor cursor = db.rawQuery("SELECT * FROM " + tableName, null);
 		while (cursor.moveToNext()) 
 		{ 
 			int uid = cursor.getInt(cursor.getColumnIndex("uid"));
@@ -416,7 +416,7 @@ public class TrafficUtil
 	{
 		try 
 		{			
-			Cursor cursor = db.rawQuery("SELECT * FROM " + tableName, new String[]{});
+			Cursor cursor = db.rawQuery("SELECT * FROM " + tableName, null);
 			while (cursor.moveToNext()) 
 			{  
 				int uid = cursor.getInt(cursor.getColumnIndex("uid"));		
@@ -452,7 +452,7 @@ public class TrafficUtil
 			boolean isWifiAvailable = isWifiAvailable(context);
 			
 			SQLiteDatabase db =  context.openOrCreateDatabase(dbName,  Context.MODE_PRIVATE, null);  
-			Cursor cursor = db.rawQuery("SELECT * FROM " + tableName, new String[]{});
+			Cursor cursor = db.rawQuery("SELECT * FROM " + tableName, null);
 			
 			while (cursor.moveToNext()) 
 			{  	
